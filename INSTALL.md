@@ -25,7 +25,6 @@ cd circuly_core_api_lumen && git checkout development && cd ..
 cd circuly_frontend_mono_v2 && git checkout development && cd ..
 ```
 
-`circuly-local-stack` is a private repo: ask its owner for access.
 Another folder than `C:\Circuly\circuly_pro` works too: set `circulyRoot` in `config.json`.
 
 ## 3. Backend, once
