@@ -152,9 +152,13 @@ module.exports = function qaAgent({ claudeExe, killTree, environment, model = 's
       run.result = st ? st[1].toUpperCase() : 'DONE';
       run.state = 'done';
       run.ask = null;
+      // The agent stays open for follow-ups (closed after IDLE_MINUTES). Only the first report is posted
+      // automatically; a later one waits for "Post update", so the ticket is not flooded.
+      run.waitingSince = Date.now();
+      run.reports = (run.reports || 0) + 1;
+      if (run.reports > 1 && run.ticket) run.linear = { state: 'update' };
       save(run);
-      finish(run);
-      if (run.ticket && run.autoPost) postToLinear(run.id).catch(() => {});
+      if (run.reports === 1 && run.ticket && run.autoPost) postToLinear(run.id).catch(() => {});
       return;
     }
     const ask = text.match(/\[\[ASK\]\]([\s\S]*)$/);
@@ -185,6 +189,7 @@ module.exports = function qaAgent({ claudeExe, killTree, environment, model = 's
   }
 
   async function start({ companyId, ticket, instructions, apps, autoPost, headless }) {
+    if (active && active.state === 'done') finish(active); // a finished run kept open for follow-ups
     if (active && ['working', 'waiting', 'starting'].includes(active.state)) throw new Error('A QA run is already active. Stop it first (one run at a time, to save memory).');
     ticket = String(ticket || '').trim().toUpperCase();
     instructions = String(instructions || '').trim().slice(0, 20000);
@@ -269,7 +274,7 @@ module.exports = function qaAgent({ claudeExe, killTree, environment, model = 's
 
   function reply(id, { text, fields }) {
     const run = load(id);
-    if (!run || run !== active || run.state !== 'waiting') throw new Error('This run is not waiting for a reply.');
+    if (!run || run !== active || !['waiting', 'done'].includes(run.state)) throw new Error('This run is not waiting for a reply.');
     let msg = String(text || '').trim().slice(0, 20000);
     let shown = msg;
     if (fields && run.ask && run.ask.fields) {
@@ -340,11 +345,13 @@ module.exports = function qaAgent({ claudeExe, killTree, environment, model = 's
     if (!r) return null;
     const files = fs.existsSync(runDir(id)) ? fs.readdirSync(runDir(id)).filter((f) => /\.(png|jpe?g)$/i.test(f)) : [];
     return { id: r.id, companyId: r.companyId, ticket: r.ticket, instructions: r.instructions, state: r.state, ask: r.ask, report: r.report, result: r.result,
+      alive: !!(active && active.id === r.id && active.child && active.child.exitCode === null),
       linear: r.linear, autoPost: r.autoPost, apps: r.apps, headless: !!r.headless, started: r.started, events: r.events.slice(since), total: r.events.length, files };
   }
 
   // Deletes a finished run with its report and screenshots. A live run must be stopped first.
   function remove(id) {
+    if (active && active.id === id && active.state === 'done') finish(active); // closes the follow-up agent
     if (active && active.id === id) throw new Error('Stop this run before deleting it.');
     if (!/^[\w-]+$/.test(id) || !fs.existsSync(path.join(runDir(id), 'run.json'))) throw new Error('Run not found.');
     fs.rmSync(runDir(id), { recursive: true, force: true });
@@ -362,7 +369,12 @@ module.exports = function qaAgent({ claudeExe, killTree, environment, model = 's
   const IDLE_MINUTES = 15;
   setInterval(() => {
     const run = active;
-    if (!run || run.state !== 'waiting' || Date.now() - (run.waitingSince || Date.now()) < IDLE_MINUTES * 60000) return;
+    if (!run || !['waiting', 'done'].includes(run.state) || Date.now() - (run.waitingSince || Date.now()) < IDLE_MINUTES * 60000) return;
+    if (run.state === 'done') {
+      add(run, { kind: 'info', text: `Agent closed after ${IDLE_MINUTES} idle minutes to free memory. A follow-up now starts a new run with this report.` });
+      finish(run);
+      return;
+    }
     run.stopped = true;
     run.state = 'stopped';
     run.ask = null;

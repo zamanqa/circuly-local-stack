@@ -251,9 +251,10 @@ async function poll() {
 }
 
 function renderAsk(j) {
-  const key = j.state + (j.state === 'waiting' && j.ask ? JSON.stringify(j.ask) : '');
+  const key = j.state + j.alive + (j.state === 'waiting' && j.ask ? JSON.stringify(j.ask) : '');
   if (key === askKey) return;
   askKey = key;
+  if (['done', 'stopped', 'failed'].includes(j.state)) return renderFollowUp(j);
   if (!(j.state === 'waiting' && j.ask)) { $('askBox').innerHTML = j.state === 'working' || j.state === 'starting' ? '<div class="meta" style="margin-top:10px">⏳ The agent is working…</div>' : ''; return; }
   const a = j.ask;
   const fields = a.fields || [];
@@ -276,12 +277,39 @@ function renderAsk(j) {
   ($('askBox').querySelector('input') || $('replyText')).focus();
 }
 
+// After a run: talk to the same agent while it is still open, otherwise start a new run that carries
+// this run's instructions and report.
+function renderFollowUp(j) {
+  const live = j.alive && j.state === 'done';
+  $('askBox').innerHTML = `<div class="ask"><div class="q"><b>${live ? 'Ask a follow-up or give more instructions' : 'Follow up'}</b>
+    <div class="meta">${live ? 'The agent is still open (it closes after 15 idle minutes).' : 'Starts a new run that already knows this task and its report.'}</div></div>
+    <textarea id="replyText" placeholder="e.g. Also test with an expired card. / Retest, the fix is deployed."></textarea>
+    <div class="row" style="margin-top:8px"><button class="primary" id="sendBtn">${live ? 'Send' : 'Start follow-up run'}</button><span class="meta">Ctrl+Enter sends</span></div></div>`;
+  const send = async () => {
+    const text = $('replyText').value.trim();
+    if (!text) { toast('Type what the agent should do.'); return; }
+    $('sendBtn').disabled = true;
+    if (live) {
+      const ok = await post(`/api/qa/${current}/reply`, { text });
+      if (!ok) { $('sendBtn').disabled = false; return; }
+      askKey = null; poll(); return;
+    }
+    const instructions = `Follow-up to an earlier QA run${j.ticket ? ` on ${j.ticket}` : ''}.\n\nEarlier instructions:\n${j.instructions || '(none)'}\n\nEarlier report:\n${j.report || '(no report: the run ended early)'}\n\nWhat to do now:\n${text}`;
+    const r = await post('/api/qa/start', { companyId: j.companyId, ticket: j.ticket || '', instructions, apps: j.apps || [], headless: !!j.headless, autoPost: j.autoPost !== false });
+    $('sendBtn').disabled = false;
+    if (r && r.id) open(r.id);
+  };
+  $('sendBtn').onclick = send;
+  $('askBox').onkeydown = (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) send(); };
+}
+
 function renderReport(j) {
   if (!j.report) { $('reportBox').innerHTML = ''; return; }
   const l = j.linear;
   const lin = !j.ticket ? '<span class="meta">No ticket: not posted.</span>'
     : !l ? (j.autoPost ? '<span class="meta">Posting to Linear…</span>' : `<button id="postBtn">Post to ${esc(j.ticket)}</button>`)
     : l.state === 'posting' ? '<span class="meta">Posting to Linear…</span>'
+    : l.state === 'update' ? `<button id="postBtn">Post update to ${esc(j.ticket)}</button>`
     : l.state === 'posted' ? `✔ Posted: <a href="${esc(l.url)}" target="_blank" rel="noopener">${esc(l.url)}</a>`
     : `<span style="color:var(--bad)">Posting failed: ${esc(l.error)}</span> <button id="postBtn">Retry</button>`;
   const html = `<div class="row" style="margin-top:14px"><b>Report</b><span style="flex:1"></span>${lin}<button id="copyBtn">Copy</button></div><div class="report">${md(j.report)}</div>`;
@@ -339,7 +367,7 @@ loadHist().then((j) => {
   if (id) open(id, false);
   else if (j.active) { history.replaceState(null, '', `/qa?run=${encodeURIComponent(j.active.id)}`); open(j.active.id, false); }
 });
-setInterval(() => { if (R && ['working', 'waiting', 'starting'].includes(R.state)) poll(); else if (R && R.linear && R.linear.state === 'posting') poll(); }, 1500);
+setInterval(() => { if (R && (['working', 'waiting', 'starting'].includes(R.state) || R.alive)) poll(); else if (R && R.linear && R.linear.state === 'posting') poll(); }, 1500);
 setInterval(loadHist, 10000);
 </script>
 </body>
