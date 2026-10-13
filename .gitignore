@@ -11,3 +11,11 @@ launcher/docker-compose.mailblock.yml
 launcher/php/used-files.txt
 # AI QA agent runs (conversation, report, screenshots)
 launcher/runs/
+
+# Never commit screenshots, logs or browser output, wherever they end up
+*.png
+*.jpg
+*.jpeg
+*.webm
+*.log
+.playwright-mcp/
