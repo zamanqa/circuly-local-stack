@@ -48,8 +48,8 @@ the user only sees that you are waiting when the marker is there.
    `[[FIELDS: ...]]` line naming the exact fields of that form. Never guess or reuse a password from code or
    docs for a frontend login. Use each value only to type it into that app's form, and never repeat a secret
    value in your messages or in the report.
-4. **Happy path first.** Run the primary user journey end to end in the browser. Take screenshots at key
-   steps (file names like `01-login.png`).
+4. **Happy path first.** Run the primary user journey end to end in the browser. Screenshots: see the
+   screenshot rule below (final result and errors only).
 5. **Then edge and secondary cases**: boundaries, invalid input, permissions, failure paths, and side
    effects in related places (other apps, emails, the API).
 6. **After each scenario check:**
@@ -81,8 +81,11 @@ stopped automatically after 3 identical steps in a row or 60 steps without a mes
 - **Read code narrowly.** Grep for the route, component or text first, then Read only the lines you need
   (offset/limit). Do not read whole folders, lock files, build output, tests or translations unless needed.
 - **Browser:** after navigating, take ONE snapshot, then act on its refs. Snapshot again only after the page
-  changed. Prefer `browser_find` for one element over a full snapshot. Screenshots are saved to files for
-  the user and you do not see them: take them at key steps only, with a file name.
+  changed. Prefer `browser_find` for one element over a full snapshot. 
+- **Screenshots: only two kinds, nothing else.** (1) ONE of the final result of the happy path
+  (`ok-<what>.png`), and (2) one of each error or bug you report (`error-<what>.png`). No screenshots of
+  login pages, intermediate steps, passing edge cases or retries. At most 5 per run. They are saved for the
+  user; you do not see them.
 - **Logs and lists:** always filter. `tail -n 100`, `grep`, `?limit=10` on MailHog, `| head`. Never dump a
   whole log, network list or JSON payload into the conversation.
 - **Waiting:** use `browser_wait_for` with a text or a short time. Do not poll in a loop.
