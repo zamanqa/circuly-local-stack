@@ -51,6 +51,18 @@ function planOnlyEnv() {
 
 module.exports = function qaAgent({ claudeExe, killTree, environment, model = 'sonnet' }) {
   fs.mkdirSync(RUNS, { recursive: true });
+  // A run still marked live from an earlier launcher lost its agent when the launcher stopped.
+  for (const d of fs.readdirSync(RUNS)) {
+    const f = path.join(RUNS, d, 'run.json');
+    try {
+      const r = JSON.parse(fs.readFileSync(f, 'utf8'));
+      if (!['working', 'waiting', 'starting'].includes(r.state)) continue;
+      r.state = 'stopped';
+      r.ask = null;
+      r.events.push({ kind: 'info', text: 'The launcher was restarted, which ended this run. Nothing was posted to Linear. Start it again from New task.', at: Date.now() });
+      fs.writeFileSync(f, JSON.stringify(r));
+    } catch { /* not a run folder */ }
+  }
   let active = null; // the one live run (memory: one browser + one agent at a time)
   const cache = new Map(); // id -> run, for runs loaded from disk
 
@@ -172,7 +184,7 @@ module.exports = function qaAgent({ claudeExe, killTree, environment, model = 's
     save(run);
   }
 
-  async function start({ companyId, ticket, instructions, apps, autoPost }) {
+  async function start({ companyId, ticket, instructions, apps, autoPost, headless }) {
     if (active && ['working', 'waiting', 'starting'].includes(active.state)) throw new Error('A QA run is already active. Stop it first (one run at a time, to save memory).');
     ticket = String(ticket || '').trim().toUpperCase();
     instructions = String(instructions || '').trim().slice(0, 20000);
@@ -186,13 +198,17 @@ module.exports = function qaAgent({ claudeExe, killTree, environment, model = 's
     const id = new Date().toISOString().replace(/[-:T]/g, '').slice(0, 14) + '-' + crypto.randomBytes(2).toString('hex');
     const dir = runDir(id);
     fs.mkdirSync(dir, { recursive: true });
-    const run = { id, companyId, ticket: ticket || null, instructions, apps: Array.isArray(apps) ? apps : [], autoPost: autoPost !== false,
+    // "password: x" (or pass/pwd/token/secret/api key) typed into the instructions reaches the agent
+    // as written, but is saved and shown as ••••.
+    const secrets = [...instructions.matchAll(/\b(?:pass\w*|pwd|secret|token|api[ _-]?key)\s*[:=]\s*(\S+)/gi)].map((m) => m[1]);
+    const run = { id, companyId, headless: !!headless, ticket: ticket || null, instructions: '', apps: Array.isArray(apps) ? apps : [], autoPost: autoPost !== false,
       started: Date.now(), state: 'starting', events: [], ask: null, report: null, result: null,
-      linear: null, secrets: [], child: null, buf: '' };
+      linear: null, secrets, child: null, buf: '' };
+    run.instructions = redact(run, instructions);
     active = run;
 
-    // Playwright for the agent: headless, own browser profile in memory, files (screenshots) into the run folder.
-    const mcp = { mcpServers: { playwright: { command: 'npx', args: ['-y', '@playwright/mcp@latest', '--headless', '--isolated',
+    // Playwright for the agent: headed (a visible window) unless the user picked headless; own browser profile in memory, files (screenshots) into the run folder.
+    const mcp = { mcpServers: { playwright: { command: 'npx', args: ['-y', '@playwright/mcp@latest', ...(headless ? ['--headless'] : []), '--isolated',
       '--output-dir', dir, '--viewport-size', '1440,900', '--image-responses', 'omit'] } } };
     fs.writeFileSync(path.join(dir, 'mcp.json'), JSON.stringify(mcp));
 
@@ -240,7 +256,7 @@ module.exports = function qaAgent({ claudeExe, killTree, environment, model = 's
       `- Frontend code: ${env.frontendDir} (branch ${env.frontendBranch})`,
       appLines,
       `- Target company ID (test in this company only): ${companyId}`,
-      '- Hub sign-in: http://localhost:3000/en/auth/oauth-login (code by email). Never use /en/auth/login on Hub.',
+      '- Hub sign-in: http://localhost:3000/en/auth/oauth-login by default. If the user asks for another sign-in URL (e.g. /en/auth/login), warn once that Hub /en/auth/login is the old hosted login that ignores the local API and can send REAL email, then use the URL the user chose.',
       '- MailHog: http://localhost:8025 (API /api/v2/messages)',
       `- Screenshots and files go to: ${dir}`,
       '',
@@ -313,7 +329,7 @@ module.exports = function qaAgent({ claudeExe, killTree, environment, model = 's
   }
 
   function list() {
-    return fs.readdirSync(RUNS).filter((d) => fs.existsSync(path.join(RUNS, d, 'run.json'))).sort().reverse().slice(0, 50).map((d) => {
+    return fs.readdirSync(RUNS).filter((d) => fs.existsSync(path.join(RUNS, d, 'run.json'))).sort().reverse().slice(0, 10).map((d) => {
       const r = load(d);
       return { id: r.id, companyId: r.companyId, ticket: r.ticket, title: r.ticket || (r.instructions || '').split('\n')[0].slice(0, 80), state: r.state, result: r.result, started: r.started };
     });
@@ -324,7 +340,15 @@ module.exports = function qaAgent({ claudeExe, killTree, environment, model = 's
     if (!r) return null;
     const files = fs.existsSync(runDir(id)) ? fs.readdirSync(runDir(id)).filter((f) => /\.(png|jpe?g)$/i.test(f)) : [];
     return { id: r.id, companyId: r.companyId, ticket: r.ticket, instructions: r.instructions, state: r.state, ask: r.ask, report: r.report, result: r.result,
-      linear: r.linear, autoPost: r.autoPost, started: r.started, events: r.events.slice(since), total: r.events.length, files };
+      linear: r.linear, autoPost: r.autoPost, apps: r.apps, headless: !!r.headless, started: r.started, events: r.events.slice(since), total: r.events.length, files };
+  }
+
+  // Deletes a finished run with its report and screenshots. A live run must be stopped first.
+  function remove(id) {
+    if (active && active.id === id) throw new Error('Stop this run before deleting it.');
+    if (!/^[\w-]+$/.test(id) || !fs.existsSync(path.join(runDir(id), 'run.json'))) throw new Error('Run not found.');
+    fs.rmSync(runDir(id), { recursive: true, force: true });
+    cache.delete(id);
   }
 
   function file(id, name) {
@@ -350,5 +374,5 @@ module.exports = function qaAgent({ claudeExe, killTree, environment, model = 's
   // The launcher window closing ends the live agent.
   function shutdown() { if (active && active.child && active.child.exitCode === null) return killTree(active.child.pid); return null; }
 
-  return { start, reply, stop, postToLinear, list, get, file, shutdown, active: () => active && { id: active.id, state: active.state } };
+  return { start, reply, stop, remove, postToLinear, list, get, file, shutdown, active: () => active && { id: active.id, state: active.state } };
 };

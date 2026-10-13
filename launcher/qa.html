@@ -19,11 +19,20 @@
   }
   * { box-sizing: border-box; }
   body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.45 system-ui, -apple-system, "Segoe UI", sans-serif; }
-  header { max-width: 1600px; margin: 0 auto; padding: 18px 24px 6px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  header { max-width: 1800px; margin: 0 auto; padding: 18px 24px 6px; display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
   header h1 { font-size: 20px; margin: 0; }
   header span { color: var(--muted); }
-  main { padding: 12px 24px 40px; display: grid; gap: 16px; grid-template-columns: minmax(300px, 380px) minmax(0, 1fr); max-width: 1600px; margin: 0 auto; align-items: start; }
+  main { padding: 12px 24px 40px; display: grid; gap: 16px; grid-template-columns: 240px minmax(300px, 360px) minmax(0, 1fr); max-width: 1800px; margin: 0 auto; align-items: start; }
   main > * { min-width: 0; }
+  .rail { position: sticky; top: 12px; padding: 12px; }
+  .rail .hist { max-height: calc(100vh - 150px); }
+  .rail .hist li { flex-wrap: wrap; row-gap: 2px; }
+  .hist .del { padding: 0 6px; border: 0; background: none; color: var(--muted); font-size: 12px; visibility: hidden; }
+  .hist li:hover .del { visibility: visible; } .hist .del:hover { color: var(--bad); }
+  .rail .hist .when { width: 100%; padding-left: 17px; font-size: 11px; color: var(--muted); }
+  .seg { display: inline-flex; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; }
+  .seg button { border: 0; border-radius: 0; }
+  .seg button.on { background: var(--accent); color: var(--accent-text); }
   .side { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; position: sticky; top: 12px; }
   .card { min-width: 0; }
   .hist li { min-width: 0; }
@@ -71,6 +80,7 @@
   .report ul { margin: 4px 0; padding-left: 20px; }
   .empty { color: var(--muted); padding: 30px 0; text-align: center; }
   #toast { position: fixed; bottom: 16px; left: 50%; transform: translateX(-50%); background: var(--bad); color: #fff; padding: 10px 14px; border-radius: 8px; max-width: 90vw; display: none; }
+  @media (max-width: 1100px) { main { grid-template-columns: minmax(300px, 360px) minmax(0, 1fr); } .rail { grid-column: 1 / -1; position: static; } .rail .hist { max-height: 180px; } }
   @media (max-width: 860px) { .side { position: static; } #runCard { min-height: 0; } main { grid-template-columns: 1fr; padding-left: 16px; padding-right: 16px; } header { padding-left: 16px; padding-right: 16px; } }
 </style>
 </head>
@@ -82,6 +92,11 @@
 </header>
 
 <main>
+  <nav class="card rail">
+    <h2>Last 10 tasks</h2>
+    <button id="newBtn" style="width:100%;margin-bottom:8px">＋ New task</button>
+    <ul class="hist" id="hist"></ul>
+  </nav>
   <div class="side">
     <section class="card">
       <h2>New task</h2>
@@ -98,15 +113,16 @@
         <label><input type="checkbox" value="POS"> POS</label>
         <label><input type="checkbox" value="Switchboard"> Switchboard</label>
       </div>
+      <label>Browser</label>
+      <div class="seg" id="browserSeg">
+        <button data-mode="headed" class="on" title="You see the browser window while the agent works">Headed</button>
+        <button data-mode="headless" title="No window: lighter on memory and CPU">Headless</button>
+      </div>
       <label class="checks" style="margin-top:12px"><input type="checkbox" id="autoPost" checked> Post the report to the Linear ticket when done</label>
       <div class="row" style="margin-top:14px">
         <button class="primary" id="startBtn">▶ Start agent</button>
       </div>
       <div class="meta" style="margin-top:10px">The agent asks before it tests, and asks you for any login it needs. Logins are not saved: they are hidden in the history and kept only while the run is active.</div>
-    </section>
-    <section class="card">
-      <h2>Runs</h2>
-      <ul class="hist" id="hist"></ul>
     </section>
   </div>
 
@@ -115,7 +131,9 @@
     <div id="run" hidden>
       <h2><span class="dot" id="rDot"></span> <span id="rTitle"></span> <span class="badge" id="rBadge"></span>
         <span style="flex:1"></span>
-        <button class="danger" id="stopBtn">Stop</button></h2>
+        <button id="editBtn" title="Copy this task into New task to change it and run it again">Edit</button>
+        <button class="danger" id="stopBtn">Stop</button>
+        <button class="danger" id="delBtn" title="Delete this task, its report and screenshots">Delete</button></h2>
       <div id="feed"></div>
       <div id="askBox"></div>
       <div id="shots"></div>
@@ -169,15 +187,25 @@ const clean = (t) => t.replace(/\[\[REPORT\]\][\s\S]*?(\[\[\/REPORT\]\]|$)/, '(r
 async function loadHist() {
   const j = await (await fetch('/api/qa/runs')).json();
   $('hist').innerHTML = j.runs.map((r) => `<li data-id="${r.id}" class="${r.id === current ? 'sel' : ''}">
-      <span class="dot ${stateDot(r.state)}"></span><span class="t">${esc(r.title || '(no title)')}</span>
-      ${r.result ? `<span class="badge ${r.result}">${r.result}</span>` : `<span class="meta">${esc(stateLabel(r.state))}</span>`}</li>`).join('')
+      <span class="dot ${stateDot(r.state)}"></span><span class="t">${esc(r.title || '(no title)')}</span>${['working', 'waiting', 'starting'].includes(r.state) ? '' : `<button class="del" data-del="${r.id}" title="Delete">✕</button>`}
+      ${r.result ? `<span class="badge ${r.result}">${r.result}</span>` : `<span class="meta">${esc(stateLabel(r.state))}</span>`}
+      <span class="when">${new Date(r.started).toLocaleString([], { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}${r.companyId ? ` · ${esc(r.companyId)}` : ''}</span></li>`).join('')
     || '<li class="meta">No runs yet.</li>';
-  if (!current && j.active) open(j.active.id);
+  return j;
 }
 const stateDot = (s) => ({ working: 'warn', starting: 'warn', waiting: 'ok', done: 'ok', failed: 'bad', stopped: '' }[s] || '');
 const stateLabel = (s) => ({ working: 'working…', starting: 'starting…', waiting: 'waiting for you', done: 'done', failed: 'failed', stopped: 'stopped' }[s] || s);
 
-function open(id) {
+// Each run has its own URL (/qa?run=<id>): links work, and back/forward move between runs.
+const runInUrl = () => new URLSearchParams(location.search).get('run');
+function showNew(push = true) {
+  current = null; R = null;
+  $('run').hidden = true; $('noRun').hidden = false;
+  if (push && runInUrl()) history.pushState(null, '', '/qa');
+  loadHist();
+}
+function open(id, push = true) {
+  if (push && runInUrl() !== id) history.pushState(null, '', `/qa?run=${encodeURIComponent(id)}`);
   current = id; R = null; events = []; askKey = null;
   $('feed').innerHTML = ''; $('askBox').innerHTML = ''; $('reportBox').innerHTML = ''; $('shots').innerHTML = '';
   $('noRun').hidden = true; $('run').hidden = false;
@@ -211,7 +239,9 @@ async function poll() {
   $('rDot').className = 'dot ' + stateDot(j.state);
   $('rBadge').textContent = j.result || stateLabel(j.state);
   $('rBadge').className = 'badge ' + (j.result || '');
-  $('stopBtn').hidden = !['working', 'waiting', 'starting'].includes(j.state);
+  const live = ['working', 'waiting', 'starting'].includes(j.state);
+  $('stopBtn').hidden = !live;
+  $('delBtn').hidden = live;
 
   renderAsk(j);
   $('shots').innerHTML = j.files.length ? `<label>Screenshots</label><div class="shots">${j.files.map((f) =>
@@ -275,14 +305,40 @@ $('startBtn').onclick = async () => {
   if (!companyId) { toast('Enter the target company ID.'); $('company').focus(); return; }
   const apps = [...$('apps').querySelectorAll('input:checked')].map((i) => i.value);
   $('startBtn').disabled = true;
-  const j = await post('/api/qa/start', { companyId, ticket: $('ticket').value, instructions: $('instr').value, apps, autoPost: $('autoPost').checked });
+  const j = await post('/api/qa/start', { companyId, headless: $('browserSeg').querySelector('.on').dataset.mode === 'headless', ticket: $('ticket').value, instructions: $('instr').value, apps, autoPost: $('autoPost').checked });
   $('startBtn').disabled = false;
   if (j && j.id) { $('ticket').value = ''; $('instr').value = ''; open(j.id); }
 };
 $('stopBtn').onclick = async () => { if (confirm('Stop the agent? Nothing is posted to Linear.')) { await post(`/api/qa/${current}/stop`); poll(); loadHist(); } };
-$('hist').onclick = (e) => { const li = e.target.closest('li[data-id]'); if (li) open(li.dataset.id); };
+$('hist').onclick = (e) => { const d = e.target.closest('[data-del]'); if (d) { e.stopPropagation(); delRun(d.dataset.del); return; } const li = e.target.closest('li[data-id]'); if (li) open(li.dataset.id); };
+$('browserSeg').onclick = (e) => { const b = e.target.closest('button[data-mode]'); if (!b) return; for (const x of $('browserSeg').children) x.classList.toggle('on', x === b); };
+async function delRun(id) {
+  if (!confirm('Delete this task, its report and screenshots? This cannot be undone. (A comment already posted to Linear stays there.)')) return;
+  if (!(await post(`/api/qa/${id}/delete`))) return;
+  if (id === current) showNew(); else loadHist();
+}
+$('delBtn').onclick = () => delRun(current);
+// Edit = copy the task into New task, change it, start it again (a run's history itself never changes).
+$('editBtn').onclick = () => {
+  if (!R) return;
+  $('company').value = R.companyId || $('company').value;
+  $('ticket').value = R.ticket || '';
+  $('instr').value = R.instructions || '';
+  for (const c of $('apps').querySelectorAll('input')) c.checked = (R.apps || []).includes(c.value);
+  for (const b of $('browserSeg').children) b.classList.toggle('on', b.dataset.mode === (R.headless ? 'headless' : 'headed'));
+  $('autoPost').checked = R.autoPost !== false;
+  $('instr').focus();
+  toast('Copied into New task: change it and click Start agent.');
+};
+$('newBtn').onclick = () => { showNew(); $('ticket').focus(); };
+window.addEventListener('popstate', () => { const id = runInUrl(); if (id) open(id, false); else showNew(false); });
 
-loadHist();
+// First load: the run in the URL, else the live run (its URL is set), else a new task.
+loadHist().then((j) => {
+  const id = runInUrl();
+  if (id) open(id, false);
+  else if (j.active) { history.replaceState(null, '', `/qa?run=${encodeURIComponent(j.active.id)}`); open(j.active.id, false); }
+});
 setInterval(() => { if (R && ['working', 'waiting', 'starting'].includes(R.state)) poll(); else if (R && R.linear && R.linear.state === 'posting') poll(); }, 1500);
 setInterval(loadHist, 10000);
 </script>

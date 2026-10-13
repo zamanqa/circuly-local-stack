@@ -987,10 +987,11 @@ const server = http.createServer(async (req, res) => {
     const body = await readBody(req);
     const p = url.pathname;
     if (p === '/api/qa/start') return send(res, 200, { id: await qa.start(body) });
-    const qp = p.match(/^\/api\/qa\/([\w-]+)\/(reply|stop|post)$/);
+    const qp = p.match(/^\/api\/qa\/([\w-]+)\/(reply|stop|post|delete)$/);
     if (qp) {
       if (qp[2] === 'reply') qa.reply(qp[1], body);
       else if (qp[2] === 'stop') qa.stop(qp[1]);
+      else if (qp[2] === 'delete') qa.remove(qp[1]);
       else return send(res, 200, await qa.postToLinear(qp[1]));
       return send(res, 200, { ok: true });
     }

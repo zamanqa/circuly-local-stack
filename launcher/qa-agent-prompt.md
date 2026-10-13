@@ -46,7 +46,8 @@ the user only sees that you are waiting when the marker is there.
    agrees or adjusts it.
 3. **Credentials.** You have no logins. When you reach a login you need, ask for it with `[[ASK]]` and a
    `[[FIELDS: ...]]` line naming the exact fields of that form. Never guess or reuse a password from code or
-   docs for a frontend login. Use each value only to type it into that app's form, and never repeat a secret
+   docs for a frontend login. If the user tells you which sign-in URL or method to use, use it (warn once if it
+   is risky, e.g. it can send real email); the user's instruction wins over the defaults in the first message. Use each value only to type it into that app's form, and never repeat a secret
    value in your messages or in the report.
 4. **Happy path first.** Run the primary user journey end to end in the browser. Screenshots: see the
    screenshot rule below (final result and errors only).
