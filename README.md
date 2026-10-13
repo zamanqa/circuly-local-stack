@@ -20,6 +20,11 @@ New PC? Start with [INSTALL.md](INSTALL.md).
   (http://localhost:8025).
 - **Telescope**: "Open Telescope" turns it on and shows the API requests. It records requests
   only, into the local Docker DB (never the shared dev DB). "Turn off Telescope" when done.
+- **AI QA Agent** ("🧪 AI QA Agent" in the Ready card, page http://localhost:3999/qa): give it a
+  target company, a Linear ticket and/or instructions. It reads the ticket and the code, sends a test
+  plan and waits for your OK, asks you for every login it needs, tests in a headless browser (happy
+  path first, then edge cases), checks MailHog, the API log and the browser console, and posts the
+  report to the ticket. See "AI QA Agent" below.
 - **Progress and ready alert**: progress bars while things build, and a sound plus a
   notification when the backend and the started apps are ready.
 - **Memory**: Docker is only started when the launcher needs it; two .bat files free memory.
@@ -59,6 +64,9 @@ circuly-local-stack/
     │   ├── fcgi.php                     tiny FastCGI client: runs a script inside PHP-FPM
     │   ├── warm.php                     pre-compiles the backend into OPcache after each start
     │   └── dump.php                     lists the files real requests used (for warm.php)
+    ├── qa-agent.js                      the AI QA agent: runs Claude Code headless, one run at a time
+    ├── qa-agent-prompt.md               the agent's instructions (edit to change how it tests)
+    ├── qa.html                          the agent's page (/qa)
     ├── stop-everything.ps1              used by "Stop everything (free memory).bat"
     └── free-memory.ps1                  used by "Free memory (...).bat"
 ```
@@ -80,6 +88,21 @@ Made by the launcher on each PC (git-ignored): `config.json`, `launcher/oidc-sig
   later can never reach the shared dev DB.
 - **Safety**: the dev DB password is read from a file and passed as an environment variable,
   never shown. The page only answers on localhost.
+
+## AI QA Agent
+
+- **Cost**: runs on your Claude plan through the Claude Code CLI (`claude` must be installed and signed
+  in with your claude.ai account). An API key in the environment is removed for the agent, so it never
+  bills per token. Model: Sonnet (`"qaModel"` in config.json to change it).
+- **Tools**: reads both repos, drives a headless browser (Playwright), reads Linear, runs `curl` and
+  reads the API log. It cannot edit code, use git, or write to Linear: the launcher posts the final
+  report itself. Linear needs the Linear connector on your claude.ai account.
+- **Token and memory guards**: stopped automatically after 3 identical steps in a row, 60 steps without
+  a message to you, or 15 minutes waiting for your answer. Screenshots are saved for you but not sent
+  to the model. The agent's process and browser end when the run ends. One run at a time.
+- **Logins** are typed into the page, hidden in the run history, not saved to disk, and passed to the
+  agent only to fill the login form.
+- Runs (conversation, report, screenshots) are in `launcher/runs/` (git-ignored).
 
 ## Troubleshooting
 

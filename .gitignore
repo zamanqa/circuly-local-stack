@@ -9,3 +9,5 @@ launcher/telescope.php
 launcher/docker-compose.mailblock.yml
 # Lists the backend files to pre-compile; made on each machine from real requests
 launcher/php/used-files.txt
+# AI QA agent runs (conversation, report, screenshots)
+launcher/runs/

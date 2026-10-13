@@ -909,6 +909,24 @@ function removeFolder(kind) {
   });
 }
 
+// ---------- AI QA agent (page /qa) ----------
+const qa = require('./qa-agent')({
+  claudeExe: expand(LOCAL.claudeExe || path.join(process.env.APPDATA || '', 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe')),
+  killTree: (pid) => killTree(pid),
+  model: LOCAL.qaModel || 'sonnet', // uses the Claude plan; sonnet stretches its limits furthest for long runs
+  environment: async () => {
+    const [be, apps, bf, ff] = await Promise.all([backendStatus(), Promise.all(Object.keys(APPS).map(appStatus)),
+      folderFor('backend', settings.backendBranch), folderFor('frontend', settings.frontendBranch)]);
+    const fdir = Object.values(procs).find((p) => p.child.exitCode === null)?.dir || ff.dir;
+    return {
+      apiUp: !!(be.api && be.api.up), db: be.db || settings.db, backendBranch: be.branch || settings.backendBranch,
+      backendDir: be.folder && fs.existsSync(be.folder) ? be.folder : bf.dir, frontendDir: fdir, frontendBranch: settings.frontendBranch,
+      companyId: settings.companyId,
+      apps: apps.map((a) => ({ name: a.name, url: a.url, running: ['running', 'external', 'compiling'].includes(a.state) })),
+    };
+  },
+});
+
 // ---------- HTTP ----------
 async function status() {
   const [backend, apps, bRepo, fRepo] = await Promise.all([
@@ -946,6 +964,20 @@ const server = http.createServer(async (req, res) => {
     if (req.method === 'GET' && url.pathname === '/') {
       return send(res, 200, fs.readFileSync(path.join(HERE, 'index.html')), 'text/html; charset=utf-8');
     }
+    if (req.method === 'GET' && url.pathname === '/qa') {
+      return send(res, 200, fs.readFileSync(path.join(HERE, 'qa.html')), 'text/html; charset=utf-8');
+    }
+    if (req.method === 'GET' && url.pathname === '/api/qa/runs') return send(res, 200, { runs: qa.list(), active: qa.active() });
+    const qg = url.pathname.match(/^\/api\/qa\/run\/([\w-]+)$/);
+    if (req.method === 'GET' && qg) {
+      const r = qa.get(qg[1], Number(url.searchParams.get('since')) || 0);
+      return r ? send(res, 200, r) : send(res, 404, { error: 'not found' });
+    }
+    const qf = url.pathname.match(/^\/qa\/file\/([\w-]+)\/([\w.-]+)$/);
+    if (req.method === 'GET' && qf) {
+      const f = qa.file(qf[1], qf[2]);
+      return f ? send(res, 200, fs.readFileSync(f), /\.png$/i.test(f) ? 'image/png' : 'image/jpeg') : send(res, 404, { error: 'not found' });
+    }
     if (req.method === 'GET' && url.pathname === '/api/status') return send(res, 200, await status());
     if (req.method === 'GET' && url.pathname === '/api/branches') {
       return send(res, 200, { backend: branchCache.backend, frontend: branchCache.frontend });
@@ -954,6 +986,14 @@ const server = http.createServer(async (req, res) => {
     if (req.method !== 'POST' || req.headers['x-launcher'] !== '1') return send(res, 404, { error: 'not found' });
     const body = await readBody(req);
     const p = url.pathname;
+    if (p === '/api/qa/start') return send(res, 200, { id: await qa.start(body) });
+    const qp = p.match(/^\/api\/qa\/([\w-]+)\/(reply|stop|post)$/);
+    if (qp) {
+      if (qp[2] === 'reply') qa.reply(qp[1], body);
+      else if (qp[2] === 'stop') qa.stop(qp[1]);
+      else return send(res, 200, await qa.postToLinear(qp[1]));
+      return send(res, 200, { ok: true });
+    }
     if (p === '/api/settings') {
       if (body.backendBranch !== undefined) { assertBranch('backend', body.backendBranch); settings.backendBranch = body.backendBranch; }
       if (body.frontendBranch !== undefined) { assertBranch('frontend', body.frontendBranch); settings.frontendBranch = body.frontendBranch; }
@@ -993,6 +1033,7 @@ const server = http.createServer(async (req, res) => {
 
 // Closing the launcher window (SIGHUP on Windows), Ctrl+C or Ctrl+Break stops the apps it started.
 async function shutdown() {
+  await qa.shutdown();
   await Promise.all(Object.values(procs).filter((p) => p.child.exitCode === null).map((p) => killTree(p.child.pid)));
   savePids();
   process.exit(0);
